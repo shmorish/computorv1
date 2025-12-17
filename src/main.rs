@@ -12,7 +12,7 @@ struct Term {
 /// 多項式をパースする
 fn parse_polynomial(input: &str) -> Result<Vec<Term>, String> {
     let re_term = Regex::new(r"(?x)
-        (?P<coefficient>[-+]?\d+\.?\d*|[-+]?\.\d+)  # 係数 (空文字列にマッチしないように修正)
+        (?P<coefficient>[-+]?\s*\d+\.?\d*|[-+]?\s*\.\d+)  # 係数 (符号と数字の間の空白を許可)
         \s*\*?\s*                       # オプションの '*' と空白
         (?:X(?:\^(?P<exponent>\d+))?)?      # 指数 (X^n or X) 部分、省略可能
     ").unwrap();
@@ -21,15 +21,36 @@ fn parse_polynomial(input: &str) -> Result<Vec<Term>, String> {
 
     for cap in re_term.captures_iter(input) {
         // 係数は必ず存在する (正規表現を変更したため)
-        let coefficient_str = cap.name("coefficient").unwrap().as_str(); //ここを修正
+        let coefficient_str = cap.name("coefficient").unwrap().as_str();
+        // 符号と数字の間の空白を削除
+        let coefficient_str = coefficient_str.replace(" ", "");
 
         let coefficient = coefficient_str.parse::<f64>()
-            .map_err(|_| format!("Invalid coefficient: {}", coefficient_str))?;
+            .map_err(|_| format!("Error: Invalid coefficient '{}'. Must be a valid number.", coefficient_str))?;
+
+        // Validate coefficient is not NaN or infinite
+        if coefficient.is_nan() || coefficient.is_infinite() {
+            return Err(format!("Error: Coefficient '{}' results in an invalid number (NaN or Infinite).", coefficient_str));
+        }
 
          // 指数が省略された場合 (例: 5X)、デフォルトの指数は 1
         let exponent = match cap.name("exponent") {
-            Some(exp_match) => exp_match.as_str().parse::<i32>()
-                .map_err(|_| format!("Invalid exponent: {}", exp_match.as_str()))?,
+            Some(exp_match) => {
+                let exp = exp_match.as_str().parse::<i32>()
+                    .map_err(|_| format!("Error: Invalid exponent: {}", exp_match.as_str()))?;
+
+                // Validate exponent is non-negative
+                if exp < 0 {
+                    return Err(format!("Error: Negative exponents are not supported. Found: {}", exp));
+                }
+
+                // Validate exponent is not excessively large
+                if exp > 1000 {
+                    return Err(format!("Error: Exponent too large. Maximum allowed is 1000, found: {}", exp));
+                }
+
+                exp
+            },
             None => {
                 // "X" が存在するかどうかで、指数が 0 か 1 かを判定
                 if cap.get(0).unwrap().as_str().to_uppercase().contains('X') { 1 } else { 0 }
@@ -47,6 +68,11 @@ fn parse_polynomial(input: &str) -> Result<Vec<Term>, String> {
         .map(|(exponent, coefficient)| Term { coefficient, exponent })
         .collect();
     sorted_terms.sort_by(|a, b| b.exponent.cmp(&a.exponent));
+
+    // Validate that at least one term was parsed
+    if sorted_terms.is_empty() {
+        return Err("Error: No valid polynomial terms found in input. Expected format: 'a * X^n + b * X^m = c'.".to_string());
+    }
 
     Ok(sorted_terms)
 }
@@ -202,9 +228,19 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let input = matches.get_one::<String>("polynomial").expect("required");
 
+    // Validate input is not empty or whitespace-only
+    if input.trim().is_empty() {
+        return Err("Error: Input cannot be empty.".into());
+    }
+
     let equation_parts: Vec<&str> = input.split('=').collect();
     if equation_parts.len() != 2 {
-        return Err("Invalid equation format. Use '=' to separate sides.".into());
+        return Err("Error: Invalid equation format. Equation must contain exactly one '=' sign.".into());
+    }
+
+    // Validate both sides are not empty
+    if equation_parts[0].trim().is_empty() || equation_parts[1].trim().is_empty() {
+        return Err("Error: Both sides of the equation must contain terms.".into());
     }
 
     let left_poly = parse_polynomial(equation_parts[0])?;
